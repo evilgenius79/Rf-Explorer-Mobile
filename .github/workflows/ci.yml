@@ -2,12 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
   pull_request:
+  workflow_dispatch:
 
-# Phase 1 stub: the meaningful hardware-free gate is the :protocol unit suite.
-# Android assembly is added once the transport/UI layers stabilise.
 jobs:
+  # Hardware-free gate: pure-Kotlin protocol command framing + frame parser.
   protocol-tests:
     runs-on: ubuntu-latest
     steps:
@@ -24,3 +24,36 @@ jobs:
 
       - name: Run :protocol unit tests
         run: ./gradlew :protocol:test --no-daemon
+
+  # Compiles the Android modules (:transport, :app) and produces a debug APK.
+  # GitHub-hosted runners include the Android SDK; we just ensure the API 35
+  # platform + build-tools are present.
+  android-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfexplorer-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
