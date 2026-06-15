@@ -326,7 +326,11 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         updateFps()
 
         if (_ui.value.isRecording) {
-            recorded.add(Instant.now() to sweep) // record raw live sweep, not the processed trace
+            if (recorded.size < MAX_RECORDED_SWEEPS) {
+                recorded.add(Instant.now() to sweep) // record raw live sweep, not the processed trace
+            } else {
+                _ui.update { it.copy(isRecording = false) } // cap memory; stop recording
+            }
         }
 
         if (waterfall.isNotEmpty() && waterfall.last().size != processed.size) waterfall.clear()
@@ -367,7 +371,10 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun topPeaks(amps: FloatArray, startHz: Long, stepHz: Long): List<PeakInfo> {
         if (amps.isEmpty()) return emptyList()
-        val order = amps.indices.sortedByDescending { amps[it] }
+        // Collapse plateaus (e.g. a clipped flat-top) to a single peak so one strong
+        // signal isn't reported as several adjacent peaks.
+        val candidates = localMaxima(amps).ifEmpty { listOf(argMax(amps)) }
+        val order = candidates.sortedByDescending { amps[it] }
         val chosen = mutableListOf<Int>()
         for (i in order) {
             if (chosen.size >= MAX_PEAKS) break
@@ -376,8 +383,26 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         return chosen.map { PeakInfo(startHz + it.toLong() * stepHz, amps[it]) }
     }
 
+    /** Indices of local maxima; a flat plateau yields a single index at its centre. */
+    private fun localMaxima(amps: FloatArray): List<Int> {
+        val n = amps.size
+        val result = mutableListOf<Int>()
+        var i = 0
+        while (i < n) {
+            var j = i
+            while (j + 1 < n && amps[j + 1] == amps[i]) j++ // plateau [i..j]
+            val leftLower = i == 0 || amps[i - 1] < amps[i]
+            val rightLower = j == n - 1 || amps[j + 1] < amps[i]
+            if (leftLower && rightLower) result.add((i + j) / 2)
+            i = j + 1
+        }
+        return result
+    }
+
     private fun appendHex(chunk: ByteArray) {
-        val hex = chunk.joinToString(" ") { "%02X".format(it) }
+        // Only the tail is ever shown, so format at most the last slice of each chunk.
+        val slice = if (chunk.size > HEX_CHUNK_BYTES) chunk.copyOfRange(chunk.size - HEX_CHUNK_BYTES, chunk.size) else chunk
+        val hex = slice.joinToString(" ") { "%02X".format(it) }
         _ui.update {
             val combined = (it.hexTail + " " + hex).trim()
             it.copy(hexTail = combined.takeLast(HEX_TAIL_CHARS))
@@ -418,6 +443,8 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val REPLAY_ASSET = "sample_capture.bin"
         const val HEX_TAIL_CHARS = 1500
+        const val HEX_CHUNK_BYTES = 256
+        const val MAX_RECORDED_SWEEPS = 20_000
         const val WATERFALL_ROWS = 100
         const val MAX_PEAKS = 5
         const val PEAK_MIN_SEPARATION = 6
