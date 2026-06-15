@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed by the release step to create/update the rolling debug release.
+permissions:
+  contents: write
+
 jobs:
   # Hardware-free gate: pure-Kotlin protocol command framing + frame parser.
   protocol-tests:
@@ -51,9 +55,29 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
 
-      - name: Upload debug APK
+      - name: Name the APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/rfexplorer-debug.apk
+
+      - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: rfexplorer-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: dist/rfexplorer-debug.apk
           if-no-files-found: error
+
+      # Publish a single rolling "debug-latest" prerelease with a stable download
+      # URL, refreshed on every push (not on PRs). Direct link to the APK:
+      #   /releases/download/debug-latest/rfexplorer-debug.apk
+      - name: Publish rolling debug release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-latest
+          name: Debug APK (latest build)
+          prerelease: true
+          body: |
+            Auto-built debug APK from `${{ github.sha }}` on `${{ github.ref_name }}`.
+            Debug-signed — for sideloading/testing only, not Play Store upload.
+          files: dist/rfexplorer-debug.apk
