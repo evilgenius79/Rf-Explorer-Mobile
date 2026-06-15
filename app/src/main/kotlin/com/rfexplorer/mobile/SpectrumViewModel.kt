@@ -219,14 +219,38 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         persistControls(c)
     }
 
-    private fun applyConfig(startMhz: Double, endMhz: Double, ampTopDbm: Int, ampBottomDbm: Int) = send(
-        Command.AnalyzerConfig(
+    /**
+     * Send the span/amplitude config, first switching to the RF module that can reach
+     * the requested band. On the 6G Combo the WSUB3G expansion covers the low range and
+     * the 6G mainboard the high range; asking the active module for an out-of-range span
+     * makes the device go silent (the trace just freezes), so we switch first.
+     */
+    private fun applyConfig(startMhz: Double, endMhz: Double, ampTopDbm: Int, ampBottomDbm: Int) {
+        val t = transport ?: return
+        val moduleCmd = moduleCommandFor(startMhz)
+        val cfg = Command.AnalyzerConfig(
             startFreqKhz = (startMhz * 1000).toLong(),
             endFreqKhz = (endMhz * 1000).toLong(),
             ampTopDbm = ampTopDbm,
             ampBottomDbm = ampBottomDbm,
-        ),
-    )
+        )
+        viewModelScope.launch {
+            runCatching {
+                if (moduleCmd != null) {
+                    t.write(moduleCmd)
+                    kotlinx.coroutines.delay(MODULE_SWITCH_SETTLE_MS)
+                }
+                t.write(cfg)
+            }
+        }
+    }
+
+    /** Pick the module whose range contains [startMhz], or null if ambiguous (keep current). */
+    private fun moduleCommandFor(startMhz: Double): Command? = when {
+        startMhz <= MODULE_EXPANSION_MAX_MHZ -> Command.SwitchModuleExpansion
+        startMhz >= MODULE_MAIN_MIN_MHZ -> Command.SwitchModuleMain
+        else -> null
+    }
 
     fun switchToMainModule() = send(Command.SwitchModuleMain)
     fun switchToExpansionModule() = send(Command.SwitchModuleExpansion)
@@ -397,5 +421,10 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         const val WATERFALL_ROWS = 100
         const val MAX_PEAKS = 5
         const val PEAK_MIN_SEPARATION = 6
+
+        // 6G Combo module ranges (MHz): WSUB3G expansion is low, 6G mainboard is high.
+        const val MODULE_EXPANSION_MAX_MHZ = 2700.0
+        const val MODULE_MAIN_MIN_MHZ = 4850.0
+        const val MODULE_SWITCH_SETTLE_MS = 250L
     }
 }
