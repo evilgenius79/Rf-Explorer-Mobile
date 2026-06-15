@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    USB devices that should trigger the app's ACTION_USB_DEVICE_ATTACHED handler.
+
+    Silicon Labs CP210x VID is 0x10C4 (4292). CP2102 PID is typically 0xEA60 (60000).
+
+    NEEDS-VERIFY ON HARDWARE: RF Explorer may ship a customised CP210x EEPROM with a
+    different PID / product string. Enumerate the actual unit (vendor/product id) and,
+    if it differs, (a) add the real PID here and (b) register a custom probe entry with
+    usb-serial-for-android's ProbeTable for Cp21xxSerialDriver. Android requires literal
+    decimal values in this file (no hex).
+-->
+<resources>
+    <usb-device vendor-id="4292" product-id="60000" />
+</resources>

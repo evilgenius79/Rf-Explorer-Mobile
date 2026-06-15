@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android / IDE
+local.properties
+*.iml
+.idea/
+.cxx/
+captures/
+
+# OS
+.DS_Store
+
+# Keystore / signing (never commit)
+*.jks
+*.keystore
+keystore.properties
