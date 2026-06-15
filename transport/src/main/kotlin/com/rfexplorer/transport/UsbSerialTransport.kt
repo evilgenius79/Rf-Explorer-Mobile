@@ -56,6 +56,9 @@ class UsbSerialTransport(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
+    private val _deviceInfo = MutableStateFlow<String?>(null)
+    override val deviceInfo: StateFlow<String?> = _deviceInfo.asStateFlow()
+
     private var port: UsbSerialPort? = null
     private var readJob: Job? = null
 
@@ -63,10 +66,19 @@ class UsbSerialTransport(
         _state.value = ConnectionState.Connecting
         try {
             val driver = findDriver() ?: run {
+                // Surface what *is* attached so a PID mismatch is obvious, not silent.
+                val attached = usbManager.deviceList.values
+                    .joinToString { "%04X:%04X".format(it.vendorId, it.productId) }
+                _deviceInfo.value = if (attached.isBlank()) "no USB devices seen" else "unmatched: $attached"
                 _state.value = ConnectionState.Error("No RF Explorer / CP210x device found")
                 return
             }
             val device = driver.device
+            _deviceInfo.value = "%04X:%04X %s".format(
+                device.vendorId,
+                device.productId,
+                device.productName ?: "CP210x",
+            )
 
             if (!usbManager.hasPermission(device) && !requestPermission(device)) {
                 _state.value = ConnectionState.Error("USB permission denied")

@@ -35,6 +35,7 @@ data class Trace(
 
 data class SpectrumUiState(
     val connection: ConnectionState = ConnectionState.Disconnected,
+    val deviceInfo: String? = null,
     val setup: RfeMessage.Setup? = null,
     val config: RfeMessage.Config? = null,
     val trace: Trace? = null,
@@ -86,8 +87,12 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
 
         sessionJob = viewModelScope.launch {
             launch { newTransport.state.collect { st -> _ui.update { it.copy(connection = st) } } }
+            launch { newTransport.deviceInfo.collect { info -> _ui.update { it.copy(deviceInfo = info) } } }
             launch { newTransport.reads.collect { onBytes(it) } }
             newTransport.open()
+            // Pull the device's config so the frequency/amplitude axis populates without
+            // the user having to tap "Req Config". No-op for the replay transport.
+            if (newTransport.state.value is ConnectionState.Connected) requestConfig()
         }
     }
 

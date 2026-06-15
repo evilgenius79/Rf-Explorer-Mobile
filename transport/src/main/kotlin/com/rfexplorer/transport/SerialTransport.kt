@@ -19,6 +19,9 @@ interface SerialTransport {
     /** Current connection lifecycle state. */
     val state: StateFlow<ConnectionState>
 
+    /** Human-readable identity of the attached device (e.g. "10C4:EA60 CP2102"), or null. */
+    val deviceInfo: StateFlow<String?>
+
     /** Open the port at the configured line settings. Suspends until connected. */
     suspend fun open()
 
@@ -50,6 +53,6 @@ object SerialConfig {
     /** Silicon Labs USB vendor id. */
     const val SILABS_VENDOR_ID = 0x10C4
 
-    /** Typical CP2102 product id. NEEDS-VERIFY against the actual RF Explorer EEPROM. */
+    /** CP2102 product id. Confirmed 10C4:EA60 on a real RF Explorer 6G Combo (2026-06-15). */
     const val CP2102_PRODUCT_ID = 0xEA60
 }

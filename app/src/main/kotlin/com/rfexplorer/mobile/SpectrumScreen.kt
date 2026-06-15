@@ -77,6 +77,7 @@ private fun StatusBar(state: SpectrumUiState) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(connection, style = MaterialTheme.typography.titleMedium)
+            state.deviceInfo?.let { Text("Device: $it", fontSize = 12.sp) }
             state.setup?.let {
                 Text("Main ${it.mainModel} · Exp ${it.expansionModel} · fw ${it.firmwareVersion}", fontSize = 12.sp)
             }

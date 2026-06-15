@@ -24,6 +24,8 @@ class ReplayTransport(
 
     override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Connected)
 
+    override val deviceInfo: StateFlow<String?> = MutableStateFlow("replay (no hardware)")
+
     override val reads: Flow<ByteArray> = flow {
         source().use { input ->
             val buf = ByteArray(chunkSize)
