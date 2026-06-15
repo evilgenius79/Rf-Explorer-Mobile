@@ -1,6 +1,6 @@
 package com.rfexplorer.mobile
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,8 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +41,7 @@ fun SpectrumScreen(
     viewModel: SpectrumViewModel = viewModel(),
 ) {
     val state by viewModel.ui.collectAsState()
+    var showWaterfall by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -54,7 +53,38 @@ fun SpectrumScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         StatusBar(state)
-        SpectrumCanvas(state)
+        ViewControls(
+            showWaterfall = showWaterfall,
+            onToggleView = { showWaterfall = it },
+            frozen = state.frozen,
+            autoscale = state.autoscale,
+            onFreeze = viewModel::toggleFreeze,
+            onAutoscale = viewModel::toggleAutoscale,
+            onClear = viewModel::clearTraces,
+        )
+
+        val window = ampWindowFor(state.trace, state.config?.ampTopDbm, state.config?.ampBottomDbm, state.autoscale)
+        Card(Modifier.fillMaxWidth()) {
+            if (showWaterfall) {
+                WaterfallCanvas(
+                    history = state.waterfall,
+                    window = window,
+                    modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
+                )
+            } else {
+                SpectrumCanvas(
+                    trace = state.trace,
+                    window = window,
+                    markerIndex = state.markerIndex,
+                    onTapBin = viewModel::setMarker,
+                    modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
+                )
+            }
+        }
+
+        MarkerReadout(state, onClear = { viewModel.setMarker(null) })
+        PeaksCard(state)
+
         ConnectionControls(viewModel, state.connection)
         CalcModeChips(state.calcMode, viewModel::setCalcMode)
         ConfigControls(viewModel)
@@ -74,8 +104,7 @@ private fun StatusBar(state: SpectrumUiState) {
     }
     val peak = state.trace?.let { t ->
         if (t.peakIndex in t.amplitudesDbm.indices) {
-            val hz = t.startFreqHz + t.peakIndex.toLong() * t.stepFreqHz
-            "Peak %.3f MHz @ %.1f dBm".format(hz / 1e6, t.amplitudesDbm[t.peakIndex])
+            "Peak %.3f MHz @ %.1f dBm".format(t.freqHzAt(t.peakIndex) / 1e6, t.amplitudesDbm[t.peakIndex])
         } else null
     }
     Card(Modifier.fillMaxWidth()) {
@@ -85,54 +114,57 @@ private fun StatusBar(state: SpectrumUiState) {
             state.setup?.let {
                 Text("Main ${it.mainModel} · Exp ${it.expansionModel} · fw ${it.firmwareVersion}", fontSize = 12.sp)
             }
-            Text("Sweeps: ${state.sweepCount}", fontSize = 12.sp)
+            Text("Sweeps: ${state.sweepCount} · %.1f /s".format(state.sweepsPerSec), fontSize = 12.sp)
             peak?.let { Text(it, fontSize = 12.sp, color = PeakAmber) }
         }
     }
 }
 
 @Composable
-private fun SpectrumCanvas(state: SpectrumUiState) {
-    val trace = state.trace
-    val ampTop = (state.config?.ampTopDbm ?: 0).toFloat()
-    val ampBottom = (state.config?.ampBottomDbm ?: -120).toFloat()
-    val span = (ampTop - ampBottom).takeIf { it > 0 } ?: 120f
+private fun ViewControls(
+    showWaterfall: Boolean,
+    onToggleView: (Boolean) -> Unit,
+    frozen: Boolean,
+    autoscale: Boolean,
+    onFreeze: () -> Unit,
+    onAutoscale: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(selected = !showWaterfall, onClick = { onToggleView(false) }, label = { Text("Spectrum") })
+        FilterChip(selected = showWaterfall, onClick = { onToggleView(true) }, label = { Text("Waterfall") })
+        FilterChip(selected = frozen, onClick = onFreeze, label = { Text("Freeze") })
+        FilterChip(selected = autoscale, onClick = onAutoscale, label = { Text("Autoscale") })
+        OutlinedButton(onClick = onClear) { Text("Clear") }
+    }
+}
 
+@Composable
+private fun MarkerReadout(state: SpectrumUiState, onClear: () -> Unit) {
+    val m = state.markerIndex ?: return
+    val t = state.trace ?: return
+    if (m !in t.amplitudesDbm.indices) return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Marker %.3f MHz @ %.1f dBm".format(t.freqHzAt(m) / 1e6, t.amplitudesDbm[m]),
+            color = androidx.compose.ui.graphics.Color(0xFF66D9FF),
+            fontSize = 13.sp,
+        )
+        OutlinedButton(onClick = onClear) { Text("Clear marker") }
+    }
+}
+
+@Composable
+private fun PeaksCard(state: SpectrumUiState) {
+    if (state.peaks.isEmpty()) return
     Card(Modifier.fillMaxWidth()) {
-        Canvas(
-            Modifier
-                .fillMaxWidth()
-                .height(260.dp)
-                .padding(8.dp),
-        ) {
-            // Grid.
-            val rows = 6
-            val cols = 8
-            for (r in 0..rows) {
-                val y = size.height * r / rows
-                drawLine(GridGray, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-            }
-            for (c in 0..cols) {
-                val x = size.width * c / cols
-                drawLine(GridGray, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-            }
-
-            val amps = trace?.amplitudesDbm ?: return@Canvas
-            if (amps.size < 2) return@Canvas
-
-            fun yFor(dbm: Float) = (size.height * (ampTop - dbm) / span).coerceIn(0f, size.height)
-            fun xFor(i: Int) = size.width * i / (amps.size - 1)
-
-            val path = Path().apply {
-                moveTo(xFor(0), yFor(amps[0]))
-                for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
-            }
-            drawPath(path, color = TraceGreen, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
-
-            // Peak marker.
-            val p = trace.peakIndex
-            if (p in amps.indices) {
-                drawCircle(PeakAmber, radius = 5f, center = Offset(xFor(p), yFor(amps[p])))
+        Column(Modifier.padding(10.dp)) {
+            Text("Top peaks", style = MaterialTheme.typography.labelMedium)
+            state.peaks.forEachIndexed { i, p ->
+                Text("${i + 1}.  %.3f MHz   %.1f dBm".format(p.freqHz / 1e6, p.dbm), fontSize = 12.sp)
             }
         }
     }
@@ -140,13 +172,14 @@ private fun SpectrumCanvas(state: SpectrumUiState) {
 
 @Composable
 private fun ConnectionControls(viewModel: SpectrumViewModel, connection: ConnectionState) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Button(onClick = viewModel::connectUsb) { Text("USB") }
         Button(onClick = viewModel::connectReplay) { Text("Replay") }
         OutlinedButton(onClick = viewModel::disconnect) { Text("Disconnect") }
-    }
-    if (connection == ConnectionState.Connected) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (connection == ConnectionState.Connected) {
             OutlinedButton(onClick = viewModel::requestConfig) { Text("Req Config") }
             OutlinedButton(onClick = viewModel::hold) { Text("Hold") }
         }
@@ -169,30 +202,70 @@ private fun CalcModeChips(current: CalcMode, onSelect: (CalcMode) -> Unit) {
 
 @Composable
 private fun ConfigControls(viewModel: SpectrumViewModel) {
+    var centerSpanMode by remember { mutableStateOf(false) }
     var startMhz by remember { mutableStateOf("100") }
     var endMhz by remember { mutableStateOf("200") }
+    var centerMhz by remember { mutableStateOf("150") }
+    var spanMhz by remember { mutableStateOf("100") }
     var ampTop by remember { mutableStateOf("-10") }
     var ampBottom by remember { mutableStateOf("-110") }
 
+    fun resolvedSpan(): Pair<Double, Double>? {
+        return if (centerSpanMode) {
+            val c = centerMhz.toDoubleOrNull() ?: return null
+            val s = spanMhz.toDoubleOrNull() ?: return null
+            (c - s / 2) to (c + s / 2)
+        } else {
+            val a = startMhz.toDoubleOrNull() ?: return null
+            val b = endMhz.toDoubleOrNull() ?: return null
+            a to b
+        }
+    }
+
+    fun apply() {
+        val (start, end) = resolvedSpan() ?: return
+        viewModel.applyConfig(
+            startMhz = start,
+            endMhz = end,
+            ampTopDbm = ampTop.toIntOrNull() ?: return,
+            ampBottomDbm = ampBottom.toIntOrNull() ?: return,
+        )
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("Start MHz", startMhz, Modifier.weight(1f)) { startMhz = it }
-            NumberField("End MHz", endMhz, Modifier.weight(1f)) { endMhz = it }
+            FilterChip(selected = !centerSpanMode, onClick = { centerSpanMode = false }, label = { Text("Start/Stop") })
+            FilterChip(selected = centerSpanMode, onClick = { centerSpanMode = true }, label = { Text("Center/Span") })
+        }
+
+        // Band presets.
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Bands:", Modifier.align(Alignment.CenterVertically))
+            BandPresets.forEach { (label, lo, hi) ->
+                OutlinedButton(onClick = {
+                    startMhz = lo.toString(); endMhz = hi.toString()
+                    centerMhz = ((lo + hi) / 2).toString(); spanMhz = (hi - lo).toString()
+                    viewModel.applyConfig(lo, hi, ampTop.toIntOrNull() ?: -10, ampBottom.toIntOrNull() ?: -110)
+                }) { Text(label) }
+            }
+        }
+
+        if (centerSpanMode) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumberField("Center MHz", centerMhz, Modifier.weight(1f)) { centerMhz = it }
+                NumberField("Span MHz", spanMhz, Modifier.weight(1f)) { spanMhz = it }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumberField("Start MHz", startMhz, Modifier.weight(1f)) { startMhz = it }
+                NumberField("End MHz", endMhz, Modifier.weight(1f)) { endMhz = it }
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NumberField("Amp top dBm", ampTop, Modifier.weight(1f)) { ampTop = it }
             NumberField("Amp bottom dBm", ampBottom, Modifier.weight(1f)) { ampBottom = it }
         }
-        Button(
-            onClick = {
-                viewModel.applyConfig(
-                    startMhz = startMhz.toDoubleOrNull() ?: return@Button,
-                    endMhz = endMhz.toDoubleOrNull() ?: return@Button,
-                    ampTopDbm = ampTop.toIntOrNull() ?: return@Button,
-                    ampBottomDbm = ampBottom.toIntOrNull() ?: return@Button,
-                )
-            },
-        ) { Text("Apply span / amplitude") }
+        Button(onClick = { apply() }) { Text("Apply span / amplitude") }
     }
 }
 
@@ -203,7 +276,11 @@ private fun ModuleAndPointsControls(viewModel: SpectrumViewModel) {
             OutlinedButton(onClick = viewModel::switchToMainModule) { Text("Main 6G") }
             OutlinedButton(onClick = viewModel::switchToExpansionModule) { Text("WSUB3G") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text("Points:")
             listOf(112, 240, 512).forEach { pts ->
                 OutlinedButton(onClick = { viewModel.setSweepPoints(pts) }) { Text("$pts") }
@@ -246,3 +323,11 @@ private fun NumberField(label: String, value: String, modifier: Modifier = Modif
         modifier = modifier,
     )
 }
+
+/** Quick-tune band presets (MHz). Applied with the current amplitude window. */
+private val BandPresets = listOf(
+    Triple("433 ISM", 430.0, 440.0),
+    Triple("915 ISM", 902.0, 928.0),
+    Triple("2.4 GHz", 2400.0, 2500.0),
+    Triple("5 GHz", 5150.0, 5850.0),
+)

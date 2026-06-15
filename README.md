@@ -46,8 +46,19 @@ Android imports so it stays testable and reusable.
 
 ### Hardware-free demo
 
-Launch the app and tap **Replay** — it streams a synthesized capture through the real
+Launch the app and tap **Replay** — it loops a synthesized capture through the real
 parser and renders a live trace with a moving peak. Use it to develop UI without a device.
+
+### App features
+
+- **Spectrum** view: filled trace, dBm/MHz axis labels, auto peak marker, tap-to-inspect
+  marker with freq/dBm readout.
+- **Waterfall** (spectrogram) view: scrolling heatmap of recent sweeps.
+- Trace processing: **Normal / Max-Hold / Avg**, **Freeze**, **Clear**, **Autoscale**.
+- **Top-peaks** table, sweeps/sec readout, raw-hex debug tail.
+- Tuning: **Start/Stop** or **Center/Span** input, one-tap **band presets**
+  (433/915 ISM, 2.4/5 GHz), amplitude window, module switch (6G ↔ WSUB3G), sweep points.
+- **CSV record + export** (cumulative format).
 
 > The Android layers (`:transport`, `:app`) are written but **could not be compiled in
 > the build environment** (no Android SDK). Expect to open them in Android Studio and

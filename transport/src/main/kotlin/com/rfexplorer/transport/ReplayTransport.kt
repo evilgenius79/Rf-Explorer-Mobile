@@ -20,6 +20,7 @@ class ReplayTransport(
     private val source: () -> InputStream,
     private val chunkSize: Int = 256,
     private val interChunkDelayMs: Long = 0,
+    private val loop: Boolean = false,
 ) : SerialTransport {
 
     override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Connected)
@@ -27,15 +28,17 @@ class ReplayTransport(
     override val deviceInfo: StateFlow<String?> = MutableStateFlow("replay (no hardware)")
 
     override val reads: Flow<ByteArray> = flow {
-        source().use { input ->
-            val buf = ByteArray(chunkSize)
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                if (n > 0) emit(buf.copyOf(n))
-                if (interChunkDelayMs > 0) delay(interChunkDelayMs)
+        do {
+            source().use { input ->
+                val buf = ByteArray(chunkSize)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    if (n > 0) emit(buf.copyOf(n))
+                    if (interChunkDelayMs > 0) delay(interChunkDelayMs)
+                }
             }
-        }
+        } while (loop)
     }
 
     override suspend fun open() = Unit
