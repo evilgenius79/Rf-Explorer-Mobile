@@ -2,6 +2,7 @@ package com.rfexplorer.transport
 
 import com.rfexplorer.protocol.Command
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Abstraction over the physical link to the RF Explorer.
@@ -15,6 +16,9 @@ interface SerialTransport {
     /** Raw bytes as they arrive from the device. Not framed — feed into the parser. */
     val reads: Flow<ByteArray>
 
+    /** Current connection lifecycle state. */
+    val state: StateFlow<ConnectionState>
+
     /** Open the port at the configured line settings. Suspends until connected. */
     suspend fun open()
 
@@ -26,6 +30,14 @@ interface SerialTransport {
 
     /** Close the port and release the USB interface. Idempotent. */
     suspend fun close()
+}
+
+/** Lifecycle of a [SerialTransport]. */
+sealed interface ConnectionState {
+    data object Disconnected : ConnectionState
+    data object Connecting : ConnectionState
+    data object Connected : ConnectionState
+    data class Error(val message: String) : ConnectionState
 }
 
 /** CP210x line settings the RF Explorer 6G Combo requires (kickoff "Hardware facts"). */

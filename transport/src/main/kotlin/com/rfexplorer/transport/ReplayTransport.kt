@@ -3,6 +3,8 @@ package com.rfexplorer.transport
 import com.rfexplorer.protocol.Command
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import java.io.InputStream
 
@@ -19,6 +21,8 @@ class ReplayTransport(
     private val chunkSize: Int = 256,
     private val interChunkDelayMs: Long = 0,
 ) : SerialTransport {
+
+    override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Connected)
 
     override val reads: Flow<ByteArray> = flow {
         source().use { input ->

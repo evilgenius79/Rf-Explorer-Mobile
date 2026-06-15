@@ -27,6 +27,7 @@ dependencies {
     // Transport hands raw bytes to the parser; expose protocol types to consumers.
     api(project(":protocol"))
 
+    implementation(libs.androidx.core.ktx)
     implementation(libs.usbserial)
     implementation(libs.kotlinx.coroutines.android)
 }

@@ -31,13 +31,27 @@ Android imports so it stays testable and reusable.
 
 - [x] **Phase 1** — multi-module Gradle scaffold, version catalog, CI stub.
 - [x] **Phase 2** — `:protocol` `Command` types + `FrameParser` + unit suite (binary-safe
-      framing, split frames, all sweep variants, version-dependent Config).
-- [ ] **Phase 3** — `:transport` USB enumeration + permission + open at 500000.
-      *First on-device checkpoint.*
-- [ ] **Phase 4** — transport → parser → raw hex/debug view.
-- [ ] **Phase 5** — Compose spectrum view + controls; replay mode in parallel.
-- [ ] **Phase 6** — module switching, calc modes, CSV export.
-- [ ] **Phase 7** — Play Store prep (signing, privacy policy, screenshots).
+      framing, split frames, all sweep variants, version-dependent Config). 23 tests.
+- [x] **Phase 3** — `:transport` `UsbSerialTransport`: CP210x enumeration (default +
+      custom probe), USB permission flow, open at 500000 8N1, coroutine read loop.
+      **Code complete, unverified — needs the on-device checkpoint.**
+- [x] **Phase 4** — transport → parser wired in `SpectrumViewModel`; raw-hex tail in the UI.
+- [x] **Phase 5** — Compose `Canvas` spectrum view + controls; **replay mode** drives the
+      same path from `assets/sample_capture.bin` with no hardware.
+- [x] **Phase 6** — module switching, client-side calc modes (Normal / Max-Hold / Avg via
+      `SweepAccumulator`), cumulative-CSV export (`CumulativeCsvWriter`).
+- [x] **Phase 7 (prep)** — `android.hardware.usb.host` feature, target SDK 35, release
+      signing config (`keystore.properties`), [privacy policy](PRIVACY.md) (no data
+      collected). Screenshots/store listing still TODO.
+
+### Hardware-free demo
+
+Launch the app and tap **Replay** — it streams a synthesized capture through the real
+parser and renders a live trace with a moving peak. Use it to develop UI without a device.
+
+> The Android layers (`:transport`, `:app`) are written but **could not be compiled in
+> the build environment** (no Android SDK). Expect to open them in Android Studio and
+> shake out any first-build issues; the `:protocol` layer is fully built and tested.
 
 ## Needs on-device verification
 
