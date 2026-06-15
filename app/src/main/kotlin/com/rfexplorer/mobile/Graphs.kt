@@ -3,6 +3,7 @@ package com.rfexplorer.mobile
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -18,6 +19,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+
+internal val MarkerCyan = Color(0xFF66D9FF)
+internal val MarkerMagenta = Color(0xFFFF6FD8)
 
 /** Amplitude window actually drawn — either the configured window or a data fit. */
 data class AmpWindow(val top: Float, val bottom: Float) {
@@ -35,11 +39,12 @@ fun ampWindowFor(trace: Trace?, configTop: Int?, configBottom: Int?, autoscale: 
     return AmpWindow(top = (configTop ?: 0).toFloat(), bottom = (configBottom ?: -120).toFloat())
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 fun SpectrumCanvas(
     trace: Trace?,
     window: AmpWindow,
-    markerIndex: Int?,
+    markerA: Int?,
+    markerB: Int?,
     modifier: Modifier = Modifier,
     onTapBin: (Int) -> Unit = {},
 ) {
@@ -56,47 +61,54 @@ fun SpectrumCanvas(
             }
         },
     ) {
-        drawGrid()
-        drawAmplitudeLabels(measurer, labelStyle, window)
+        // Drawing runs at frame time; never let a draw glitch take down the app.
+        runCatching {
+            drawGrid()
+            drawAmplitudeLabels(measurer, labelStyle, window)
 
-        val amps = trace?.amplitudesDbm
-        if (amps == null || amps.size < 2) return@Canvas
+            val amps = trace?.amplitudesDbm
+            if (amps != null && amps.size >= 2) {
+                fun yFor(dbm: Float) = (size.height * (window.top - dbm) / window.span).coerceIn(0f, size.height)
+                fun xFor(i: Int) = size.width * i / (amps.size - 1)
 
-        fun yFor(dbm: Float) = (size.height * (window.top - dbm) / window.span).coerceIn(0f, size.height)
-        fun xFor(i: Int) = size.width * i / (amps.size - 1)
+                val fill = Path().apply {
+                    moveTo(0f, size.height)
+                    lineTo(xFor(0), yFor(amps[0]))
+                    for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
+                    lineTo(size.width, size.height)
+                    close()
+                }
+                drawPath(fill, color = TraceGreen.copy(alpha = 0.18f))
 
-        // Filled area under the trace.
-        val fill = Path().apply {
-            moveTo(0f, size.height)
-            lineTo(xFor(0), yFor(amps[0]))
-            for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
-            lineTo(size.width, size.height)
-            close()
+                val line = Path().apply {
+                    moveTo(xFor(0), yFor(amps[0]))
+                    for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
+                }
+                drawPath(line, color = TraceGreen, style = Stroke(width = 2.5f))
+
+                if (trace.peakIndex in amps.indices) {
+                    drawCircle(PeakAmber, radius = 5f, center = Offset(xFor(trace.peakIndex), yFor(amps[trace.peakIndex])))
+                }
+                drawMarker(markerA, amps, MarkerCyan, ::xFor, ::yFor)
+                drawMarker(markerB, amps, MarkerMagenta, ::xFor, ::yFor)
+
+                drawFrequencyLabels(measurer, labelStyle, trace)
+            }
         }
-        drawPath(fill, color = TraceGreen.copy(alpha = 0.18f))
-
-        // Trace line.
-        val line = Path().apply {
-            moveTo(xFor(0), yFor(amps[0]))
-            for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
-        }
-        drawPath(line, color = TraceGreen, style = Stroke(width = 2.5f))
-
-        // Auto peak marker.
-        if (trace.peakIndex in amps.indices) {
-            drawCircle(PeakAmber, radius = 5f, center = Offset(xFor(trace.peakIndex), yFor(amps[trace.peakIndex])))
-        }
-
-        // Tap marker: vertical line + dot.
-        if (markerIndex != null && markerIndex in amps.indices) {
-            val mx = xFor(markerIndex)
-            drawLine(Color(0xFF66D9FF), Offset(mx, 0f), Offset(mx, size.height), strokeWidth = 1.5f)
-            drawCircle(Color(0xFF66D9FF), radius = 4f, center = Offset(mx, yFor(amps[markerIndex])))
-        }
-
-        // Frequency labels along the bottom.
-        drawFrequencyLabels(measurer, labelStyle, trace)
     }
+}
+
+private fun DrawScope.drawMarker(
+    index: Int?,
+    amps: FloatArray,
+    color: Color,
+    xFor: (Int) -> Float,
+    yFor: (Float) -> Float,
+) {
+    if (index == null || index !in amps.indices) return
+    val x = xFor(index)
+    drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5f)
+    drawCircle(color, radius = 4f, center = Offset(x, yFor(amps[index])))
 }
 
 private fun DrawScope.drawGrid(rows: Int = 6, cols: Int = 8) {
@@ -122,6 +134,7 @@ private fun DrawScope.drawAmplitudeLabels(measurer: TextMeasurer, style: TextSty
 private fun DrawScope.drawFrequencyLabels(measurer: TextMeasurer, style: TextStyle, trace: Trace) {
     fun mhz(i: Int) = "%.1f".format(trace.freqHzAt(i) / 1e6)
     val last = trace.pointCount - 1
+    if (last < 1) return
     val mid = last / 2
     val texts = listOf(0 to mhz(0), mid to mhz(mid), last to mhz(last))
     for ((i, t) in texts) {
@@ -131,38 +144,40 @@ private fun DrawScope.drawFrequencyLabels(measurer: TextMeasurer, style: TextSty
     }
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 fun WaterfallCanvas(
     history: List<FloatArray>,
     window: AmpWindow,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier) {
-        if (history.isEmpty()) {
-            drawGrid()
-            return@Canvas
-        }
-        val cols = history.last().size
-        val rows = history.size
-        if (cols < 1) return@Canvas
-
-        val pixels = IntArray(cols * rows)
-        // Newest sweep on top: y=0 maps to history.last().
-        for (y in 0 until rows) {
-            val row = history[rows - 1 - y]
-            val base = y * cols
-            val n = minOf(cols, row.size)
-            for (x in 0 until n) {
-                val t = (row[x] - window.bottom) / window.span
-                pixels[base + x] = heatArgb(t)
+        runCatching {
+            if (history.isEmpty()) {
+                drawGrid()
+                return@runCatching
             }
+            val cols = history.last().size
+            val rows = history.size
+            if (cols < 1) return@runCatching
+
+            val pixels = IntArray(cols * rows)
+            // Newest sweep on top: y=0 maps to history.last().
+            for (y in 0 until rows) {
+                val row = history[rows - 1 - y]
+                val base = y * cols
+                val n = minOf(cols, row.size)
+                for (x in 0 until n) {
+                    val t = (row[x] - window.bottom) / window.span
+                    pixels[base + x] = heatArgb(t)
+                }
+            }
+            val bmp = Bitmap.createBitmap(cols, rows, Bitmap.Config.ARGB_8888)
+            bmp.setPixels(pixels, 0, cols, 0, 0, cols, rows)
+            drawImage(
+                image = bmp.asImageBitmap(),
+                dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+            )
         }
-        val bmp = Bitmap.createBitmap(cols, rows, Bitmap.Config.ARGB_8888)
-        bmp.setPixels(pixels, 0, cols, 0, 0, cols, rows)
-        drawImage(
-            image = bmp.asImageBitmap(),
-            dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
-        )
     }
 }
 

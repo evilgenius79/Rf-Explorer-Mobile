@@ -1,5 +1,6 @@
 package com.rfexplorer.mobile
 
+import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,12 +29,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.rfexplorer.protocol.CalcMode
 import com.rfexplorer.transport.ConnectionState
+import java.io.File
+import kotlin.math.abs
 
 @Composable
 fun SpectrumScreen(
@@ -75,19 +80,20 @@ fun SpectrumScreen(
                 SpectrumCanvas(
                     trace = state.trace,
                     window = window,
-                    markerIndex = state.markerIndex,
+                    markerA = state.markerA,
+                    markerB = state.markerB,
                     onTapBin = viewModel::setMarker,
                     modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
                 )
             }
         }
 
-        MarkerReadout(state, onClear = { viewModel.setMarker(null) })
+        MarkerControls(state, viewModel)
         PeaksCard(state)
 
         ConnectionControls(viewModel, state.connection)
         CalcModeChips(state.calcMode, viewModel::setCalcMode)
-        ConfigControls(viewModel)
+        ConfigControls(viewModel, state.controls)
         ModuleAndPointsControls(viewModel)
         RecordingControls(viewModel, state)
         HexDebug(state.hexTail)
@@ -143,17 +149,37 @@ private fun ViewControls(
 }
 
 @Composable
-private fun MarkerReadout(state: SpectrumUiState, onClear: () -> Unit) {
-    val m = state.markerIndex ?: return
-    val t = state.trace ?: return
-    if (m !in t.amplitudesDbm.indices) return
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "Marker %.3f MHz @ %.1f dBm".format(t.freqHzAt(m) / 1e6, t.amplitudesDbm[m]),
-            color = androidx.compose.ui.graphics.Color(0xFF66D9FF),
-            fontSize = 13.sp,
-        )
-        OutlinedButton(onClick = onClear) { Text("Clear marker") }
+private fun MarkerControls(state: SpectrumUiState, viewModel: SpectrumViewModel) {
+    val t = state.trace
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(state.activeMarker == 0, onClick = { viewModel.setActiveMarker(0) }, label = { Text("Mkr A") })
+            FilterChip(state.activeMarker == 1, onClick = { viewModel.setActiveMarker(1) }, label = { Text("Mkr B") })
+            OutlinedButton(onClick = viewModel::snapActiveMarkerToPeak) { Text("→ Peak") }
+            OutlinedButton(onClick = viewModel::clearMarkers) { Text("Clear Mkr") }
+        }
+        if (t != null) {
+            state.markerA?.let {
+                if (it in t.amplitudesDbm.indices) {
+                    Text("A: %.3f MHz  %.1f dBm".format(t.freqHzAt(it) / 1e6, t.amplitudesDbm[it]), color = MarkerCyan, fontSize = 12.sp)
+                }
+            }
+            state.markerB?.let {
+                if (it in t.amplitudesDbm.indices) {
+                    Text("B: %.3f MHz  %.1f dBm".format(t.freqHzAt(it) / 1e6, t.amplitudesDbm[it]), color = MarkerMagenta, fontSize = 12.sp)
+                }
+            }
+            val a = state.markerA
+            val b = state.markerB
+            if (a != null && b != null && a in t.amplitudesDbm.indices && b in t.amplitudesDbm.indices) {
+                val df = abs(t.freqHzAt(b) - t.freqHzAt(a)) / 1e6
+                val dd = t.amplitudesDbm[b] - t.amplitudesDbm[a]
+                Text("Δ %.3f MHz   %.1f dB".format(df, dd), fontSize = 12.sp)
+            }
+        }
     }
 }
 
@@ -191,81 +217,62 @@ private fun CalcModeChips(current: CalcMode, onSelect: (CalcMode) -> Unit) {
     val modes = listOf(CalcMode.NORMAL, CalcMode.MAX_HOLD, CalcMode.AVG)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         modes.forEach { mode ->
-            FilterChip(
-                selected = current == mode,
-                onClick = { onSelect(mode) },
-                label = { Text(mode.name) },
-            )
+            FilterChip(selected = current == mode, onClick = { onSelect(mode) }, label = { Text(mode.name) })
         }
     }
 }
 
 @Composable
-private fun ConfigControls(viewModel: SpectrumViewModel) {
-    var centerSpanMode by remember { mutableStateOf(false) }
-    var startMhz by remember { mutableStateOf("100") }
-    var endMhz by remember { mutableStateOf("200") }
-    var centerMhz by remember { mutableStateOf("150") }
-    var spanMhz by remember { mutableStateOf("100") }
-    var ampTop by remember { mutableStateOf("-10") }
-    var ampBottom by remember { mutableStateOf("-110") }
-
-    fun resolvedSpan(): Pair<Double, Double>? {
-        return if (centerSpanMode) {
-            val c = centerMhz.toDoubleOrNull() ?: return null
-            val s = spanMhz.toDoubleOrNull() ?: return null
-            (c - s / 2) to (c + s / 2)
-        } else {
-            val a = startMhz.toDoubleOrNull() ?: return null
-            val b = endMhz.toDoubleOrNull() ?: return null
-            a to b
-        }
-    }
-
-    fun apply() {
-        val (start, end) = resolvedSpan() ?: return
-        viewModel.applyConfig(
-            startMhz = start,
-            endMhz = end,
-            ampTopDbm = ampTop.toIntOrNull() ?: return,
-            ampBottomDbm = ampBottom.toIntOrNull() ?: return,
-        )
-    }
-
+private fun ConfigControls(viewModel: SpectrumViewModel, controls: ControlFields) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !centerSpanMode, onClick = { centerSpanMode = false }, label = { Text("Start/Stop") })
-            FilterChip(selected = centerSpanMode, onClick = { centerSpanMode = true }, label = { Text("Center/Span") })
+            FilterChip(
+                selected = !controls.centerSpan,
+                onClick = { viewModel.updateControls(controls.copy(centerSpan = false)) },
+                label = { Text("Start/Stop") },
+            )
+            FilterChip(
+                selected = controls.centerSpan,
+                onClick = { viewModel.updateControls(controls.copy(centerSpan = true)) },
+                label = { Text("Center/Span") },
+            )
         }
 
-        // Band presets.
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Bands:", Modifier.align(Alignment.CenterVertically))
             BandPresets.forEach { (label, lo, hi) ->
-                OutlinedButton(onClick = {
-                    startMhz = lo.toString(); endMhz = hi.toString()
-                    centerMhz = ((lo + hi) / 2).toString(); spanMhz = (hi - lo).toString()
-                    viewModel.applyConfig(lo, hi, ampTop.toIntOrNull() ?: -10, ampBottom.toIntOrNull() ?: -110)
-                }) { Text(label) }
+                OutlinedButton(onClick = { viewModel.applyPreset(lo, hi) }) { Text(label) }
             }
         }
 
-        if (centerSpanMode) {
+        if (controls.centerSpan) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Center MHz", centerMhz, Modifier.weight(1f)) { centerMhz = it }
-                NumberField("Span MHz", spanMhz, Modifier.weight(1f)) { spanMhz = it }
+                NumberField("Center MHz", controls.centerMhz, Modifier.weight(1f)) {
+                    viewModel.updateControls(controls.copy(centerMhz = it))
+                }
+                NumberField("Span MHz", controls.spanMhz, Modifier.weight(1f)) {
+                    viewModel.updateControls(controls.copy(spanMhz = it))
+                }
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Start MHz", startMhz, Modifier.weight(1f)) { startMhz = it }
-                NumberField("End MHz", endMhz, Modifier.weight(1f)) { endMhz = it }
+                NumberField("Start MHz", controls.startMhz, Modifier.weight(1f)) {
+                    viewModel.updateControls(controls.copy(startMhz = it))
+                }
+                NumberField("End MHz", controls.endMhz, Modifier.weight(1f)) {
+                    viewModel.updateControls(controls.copy(endMhz = it))
+                }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("Amp top dBm", ampTop, Modifier.weight(1f)) { ampTop = it }
-            NumberField("Amp bottom dBm", ampBottom, Modifier.weight(1f)) { ampBottom = it }
+            NumberField("Amp top dBm", controls.ampTop, Modifier.weight(1f)) {
+                viewModel.updateControls(controls.copy(ampTop = it))
+            }
+            NumberField("Amp bottom dBm", controls.ampBottom, Modifier.weight(1f)) {
+                viewModel.updateControls(controls.copy(ampBottom = it))
+            }
         }
-        Button(onClick = { apply() }) { Text("Apply span / amplitude") }
+        Button(onClick = viewModel::applyFromControls) { Text("Apply span / amplitude") }
     }
 }
 
@@ -291,12 +298,16 @@ private fun ModuleAndPointsControls(viewModel: SpectrumViewModel) {
 
 @Composable
 private fun RecordingControls(viewModel: SpectrumViewModel, state: SpectrumUiState) {
+    val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = viewModel::toggleRecording) {
                 Text(if (state.isRecording) "Stop rec (${state.recordedSweeps})" else "Record CSV")
             }
             OutlinedButton(onClick = { viewModel.exportCsv() }) { Text("Export CSV") }
+            OutlinedButton(onClick = {
+                viewModel.exportCsv()?.let { shareCsv(context, File(it)) }
+            }) { Text("Share CSV") }
         }
         state.lastExportPath?.let { Text("Saved: $it", fontSize = 11.sp) }
     }
@@ -322,6 +333,16 @@ private fun NumberField(label: String, value: String, modifier: Modifier = Modif
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier,
     )
+}
+
+private fun shareCsv(context: android.content.Context, file: File) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/csv"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share CSV"))
 }
 
 /** Quick-tune band presets (MHz). Applied with the current amplitude window. */

@@ -1,6 +1,7 @@
 package com.rfexplorer.mobile
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rfexplorer.protocol.CalcMode
@@ -38,6 +39,17 @@ data class Trace(
 /** A detected peak in the current trace. */
 data class PeakInfo(val freqHz: Long, val dbm: Float)
 
+/** Editable tuning fields, persisted across launches. */
+data class ControlFields(
+    val startMhz: String = "100",
+    val endMhz: String = "200",
+    val centerMhz: String = "150",
+    val spanMhz: String = "100",
+    val ampTop: String = "-10",
+    val ampBottom: String = "-110",
+    val centerSpan: Boolean = false,
+)
+
 data class SpectrumUiState(
     val connection: ConnectionState = ConnectionState.Disconnected,
     val deviceInfo: String? = null,
@@ -54,8 +66,11 @@ data class SpectrumUiState(
     val lastExportPath: String? = null,
     val frozen: Boolean = false,
     val autoscale: Boolean = false,
-    val markerIndex: Int? = null,
+    val markerA: Int? = null,
+    val markerB: Int? = null,
+    val activeMarker: Int = 0, // 0 = A, 1 = B
     val peaks: List<PeakInfo> = emptyList(),
+    val controls: ControlFields = ControlFields(),
 )
 
 /**
@@ -73,11 +88,24 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
     private val csv = CumulativeCsvWriter()
     private val recorded = mutableListOf<Pair<Instant, RfeMessage.Sweep>>()
     private val waterfall = ArrayDeque<FloatArray>()
+    private val prefs = app.getSharedPreferences("rfe_settings", Context.MODE_PRIVATE)
 
     private var transport: SerialTransport? = null
     private var sessionJob: Job? = null
     private var lastSweepNanos = 0L
     private var fpsEma = 0f
+
+    init {
+        val mode = runCatching { CalcMode.valueOf(prefs.getString("calcMode", "NORMAL")!!) }.getOrDefault(CalcMode.NORMAL)
+        accumulator.mode = mode
+        _ui.update {
+            it.copy(
+                calcMode = mode,
+                autoscale = prefs.getBoolean("autoscale", false),
+                controls = loadControls(),
+            )
+        }
+    }
 
     fun connectUsb() = connect(UsbSerialTransport(getApplication()))
 
@@ -99,7 +127,10 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         waterfall.clear()
         lastSweepNanos = 0L
         fpsEma = 0f
-        _ui.update { SpectrumUiState(calcMode = it.calcMode, autoscale = it.autoscale) }
+        // Keep persisted/user choices across reconnects.
+        _ui.update {
+            SpectrumUiState(calcMode = it.calcMode, autoscale = it.autoscale, controls = it.controls)
+        }
 
         sessionJob = viewModelScope.launch {
             launch { newTransport.state.collect { st -> _ui.update { it.copy(connection = st) } } }
@@ -121,25 +152,74 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
     fun setCalcMode(mode: CalcMode) {
         accumulator.mode = mode
         accumulator.reset()
+        prefs.edit().putString("calcMode", mode.name).apply()
         _ui.update { it.copy(calcMode = mode) }
     }
 
     fun toggleFreeze() = _ui.update { it.copy(frozen = !it.frozen) }
 
-    fun toggleAutoscale() = _ui.update { it.copy(autoscale = !it.autoscale) }
+    fun toggleAutoscale() = _ui.update {
+        val next = !it.autoscale
+        prefs.edit().putBoolean("autoscale", next).apply()
+        it.copy(autoscale = next)
+    }
+
+    // ---- Markers --------------------------------------------------------------
+
+    fun setActiveMarker(which: Int) = _ui.update { it.copy(activeMarker = which) }
 
     fun setMarker(index: Int?) = _ui.update {
         val clamped = index?.coerceIn(0, (it.trace?.pointCount ?: 1) - 1)
-        it.copy(markerIndex = clamped)
+        if (it.activeMarker == 0) it.copy(markerA = clamped) else it.copy(markerB = clamped)
     }
+
+    fun snapActiveMarkerToPeak() {
+        val p = _ui.value.trace?.peakIndex ?: return
+        setMarker(p)
+    }
+
+    fun clearMarkers() = _ui.update { it.copy(markerA = null, markerB = null) }
+
+    // ---- Trace controls -------------------------------------------------------
 
     fun clearTraces() {
         accumulator.reset()
         waterfall.clear()
-        _ui.update { it.copy(trace = null, waterfall = emptyList(), markerIndex = null, peaks = emptyList()) }
+        _ui.update {
+            it.copy(trace = null, waterfall = emptyList(), markerA = null, markerB = null, peaks = emptyList())
+        }
     }
 
-    fun applyConfig(startMhz: Double, endMhz: Double, ampTopDbm: Int, ampBottomDbm: Int) = send(
+    // ---- Tuning ---------------------------------------------------------------
+
+    fun updateControls(controls: ControlFields) = _ui.update { it.copy(controls = controls) }
+
+    fun applyFromControls() {
+        val c = _ui.value.controls
+        val span = if (c.centerSpan) {
+            val ce = c.centerMhz.toDoubleOrNull() ?: return
+            val sp = c.spanMhz.toDoubleOrNull() ?: return
+            (ce - sp / 2) to (ce + sp / 2)
+        } else {
+            val a = c.startMhz.toDoubleOrNull() ?: return
+            val b = c.endMhz.toDoubleOrNull() ?: return
+            a to b
+        }
+        applyConfig(span.first, span.second, c.ampTop.toIntOrNull() ?: return, c.ampBottom.toIntOrNull() ?: return)
+        persistControls(c)
+    }
+
+    fun applyPreset(loMhz: Double, hiMhz: Double) {
+        val c = _ui.value.controls.copy(
+            startMhz = fmt(loMhz), endMhz = fmt(hiMhz),
+            centerMhz = fmt((loMhz + hiMhz) / 2), spanMhz = fmt(hiMhz - loMhz),
+        )
+        _ui.update { it.copy(controls = c) }
+        applyConfig(loMhz, hiMhz, c.ampTop.toIntOrNull() ?: -10, c.ampBottom.toIntOrNull() ?: -110)
+        persistControls(c)
+    }
+
+    private fun applyConfig(startMhz: Double, endMhz: Double, ampTopDbm: Int, ampBottomDbm: Int) = send(
         Command.AnalyzerConfig(
             startFreqKhz = (startMhz * 1000).toLong(),
             endFreqKhz = (endMhz * 1000).toLong(),
@@ -153,6 +233,8 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
     fun setSweepPoints(points: Int) = send(Command.SetSweepPoints(points))
     fun requestConfig() = send(Command.RequestConfig)
     fun hold() = send(Command.RequestHold)
+
+    // ---- Recording / export ---------------------------------------------------
 
     fun toggleRecording() {
         _ui.update {
@@ -172,6 +254,8 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         return file.absolutePath
     }
 
+    // ---- Internals ------------------------------------------------------------
+
     private fun send(command: Command) {
         val t = transport ?: return
         viewModelScope.launch { runCatching { t.write(command) } }
@@ -182,13 +266,32 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         for (message in parser.parse(chunk)) {
             when (message) {
                 is RfeMessage.Setup -> _ui.update { it.copy(setup = message) }
-                is RfeMessage.Config -> {
-                    accumulator.reset()
-                    waterfall.clear()
-                    _ui.update { it.copy(config = message, markerIndex = null) }
-                }
+                is RfeMessage.Config -> onConfig(message)
                 is RfeMessage.Sweep -> onSweep(message)
             }
+        }
+    }
+
+    private fun onConfig(config: RfeMessage.Config) {
+        accumulator.reset()
+        waterfall.clear()
+        // Reflect the device's actual span/amplitude in the editable fields.
+        val startMhz = config.startFreqHz / 1e6
+        val endMhz = (config.startFreqHz + config.freqStepHz * (config.sweepPoints - 1).coerceAtLeast(0)) / 1e6
+        _ui.update {
+            it.copy(
+                config = config,
+                markerA = null,
+                markerB = null,
+                controls = it.controls.copy(
+                    startMhz = fmt(startMhz),
+                    endMhz = fmt(endMhz),
+                    centerMhz = fmt((startMhz + endMhz) / 2),
+                    spanMhz = fmt(endMhz - startMhz),
+                    ampTop = config.ampTopDbm.toString(),
+                    ampBottom = config.ampBottomDbm.toString(),
+                ),
+            )
         }
     }
 
@@ -202,7 +305,6 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
             recorded.add(Instant.now() to sweep) // record raw live sweep, not the processed trace
         }
 
-        // Waterfall history (reset if the bin count changed).
         if (waterfall.isNotEmpty() && waterfall.last().size != processed.size) waterfall.clear()
         waterfall.addLast(processed)
         while (waterfall.size > WATERFALL_ROWS) waterfall.removeFirst()
@@ -257,6 +359,32 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(hexTail = combined.takeLast(HEX_TAIL_CHARS))
         }
     }
+
+    private fun loadControls(): ControlFields = ControlFields(
+        startMhz = prefs.getString("startMhz", "100")!!,
+        endMhz = prefs.getString("endMhz", "200")!!,
+        centerMhz = prefs.getString("centerMhz", "150")!!,
+        spanMhz = prefs.getString("spanMhz", "100")!!,
+        ampTop = prefs.getString("ampTop", "-10")!!,
+        ampBottom = prefs.getString("ampBottom", "-110")!!,
+        centerSpan = prefs.getBoolean("centerSpan", false),
+    )
+
+    private fun persistControls(c: ControlFields) {
+        prefs.edit()
+            .putString("startMhz", c.startMhz)
+            .putString("endMhz", c.endMhz)
+            .putString("centerMhz", c.centerMhz)
+            .putString("spanMhz", c.spanMhz)
+            .putString("ampTop", c.ampTop)
+            .putString("ampBottom", c.ampBottom)
+            .putBoolean("centerSpan", c.centerSpan)
+            .apply()
+    }
+
+    private fun fmt(v: Double): String =
+        if (v == v.toLong().toDouble()) v.toLong().toString()
+        else "%.3f".format(v).trimEnd('0').trimEnd('.')
 
     override fun onCleared() {
         disconnect()
