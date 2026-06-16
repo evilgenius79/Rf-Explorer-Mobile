@@ -74,7 +74,6 @@ fun SpectrumScreen(
                 WaterfallCanvas(
                     history = state.waterfall,
                     window = window,
-                    trace = state.trace,
                     modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
                 )
             } else {
@@ -88,6 +87,7 @@ fun SpectrumScreen(
                 )
             }
         }
+        FrequencyAxis(state.trace)
 
         MarkerControls(state, viewModel)
         PeaksCard(state)
@@ -146,6 +146,20 @@ private fun ViewControls(
         FilterChip(selected = frozen, onClick = onFreeze, label = { Text("Freeze") })
         FilterChip(selected = autoscale, onClick = onAutoscale, label = { Text("Autoscale") })
         OutlinedButton(onClick = onClear) { Text("Clear") }
+    }
+}
+
+@Composable
+private fun FrequencyAxis(trace: Trace?) {
+    if (trace == null || trace.pointCount < 2) return
+    val start = trace.freqHzAt(0) / 1e6
+    val mid = trace.freqHzAt(trace.pointCount / 2) / 1e6
+    val end = trace.freqHzAt(trace.pointCount - 1) / 1e6
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("%.1f".format(start), fontSize = 10.sp, color = color)
+        Text("%.1f MHz".format(mid), fontSize = 10.sp, color = color)
+        Text("%.1f".format(end), fontSize = 10.sp, color = color)
     }
 }
 

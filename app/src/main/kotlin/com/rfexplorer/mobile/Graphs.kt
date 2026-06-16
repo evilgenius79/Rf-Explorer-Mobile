@@ -6,7 +6,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
@@ -62,54 +61,60 @@ fun SpectrumCanvas(
             }
         },
     ) {
-        // Drawing runs at frame time; never let a draw glitch take down the app.
         runCatching {
             drawGrid()
             drawAmplitudeLabels(measurer, labelStyle, window)
+        }
 
-            val amps = trace?.amplitudesDbm
-            if (amps != null && amps.size >= 2) {
-                fun yFor(dbm: Float) = (size.height * (window.top - dbm) / window.span).coerceIn(0f, size.height)
-                fun xFor(i: Int) = size.width * i / (amps.size - 1)
+        val amps = trace?.amplitudesDbm
+        if (trace != null && amps != null && amps.size >= 2) {
+            val n = amps.size
+            val w = size.width
+            val h = size.height
+            val top = window.top
+            val span = window.span
+            fun xAt(i: Int) = w * i / (n - 1)
+            fun yAt(dbm: Float) = (h * (top - dbm) / span).coerceIn(0f, h)
 
+            val err = runCatching {
+                val line = Path().apply {
+                    moveTo(xAt(0), yAt(amps[0]))
+                    for (i in 1 until n) lineTo(xAt(i), yAt(amps[i]))
+                }
                 val fill = Path().apply {
-                    moveTo(0f, size.height)
-                    lineTo(xFor(0), yFor(amps[0]))
-                    for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
-                    lineTo(size.width, size.height)
+                    moveTo(xAt(0), yAt(amps[0]))
+                    for (i in 1 until n) lineTo(xAt(i), yAt(amps[i]))
+                    lineTo(w, h)
+                    lineTo(0f, h)
                     close()
                 }
-                drawPath(fill, color = TraceGreen.copy(alpha = 0.18f))
-
-                val line = Path().apply {
-                    moveTo(xFor(0), yFor(amps[0]))
-                    for (i in 1 until amps.size) lineTo(xFor(i), yFor(amps[i]))
-                }
+                drawPath(fill, color = TraceGreen.copy(alpha = 0.15f))
                 drawPath(line, color = TraceGreen, style = Stroke(width = 2.5f))
 
-                if (trace.peakIndex in amps.indices) {
-                    drawCircle(PeakAmber, radius = 5f, center = Offset(xFor(trace.peakIndex), yFor(amps[trace.peakIndex])))
+                if (trace.peakIndex in 0 until n) {
+                    drawCircle(PeakAmber, 5f, Offset(xAt(trace.peakIndex), yAt(amps[trace.peakIndex])))
                 }
-                drawMarker(markerA, amps, MarkerCyan, ::xFor, ::yFor)
-                drawMarker(markerB, amps, MarkerMagenta, ::xFor, ::yFor)
+                markerA?.takeIf { it in 0 until n }?.let { mi ->
+                    drawLine(MarkerCyan, Offset(xAt(mi), 0f), Offset(xAt(mi), h), strokeWidth = 1.5f)
+                    drawCircle(MarkerCyan, 4f, Offset(xAt(mi), yAt(amps[mi])))
+                }
+                markerB?.takeIf { it in 0 until n }?.let { mi ->
+                    drawLine(MarkerMagenta, Offset(xAt(mi), 0f), Offset(xAt(mi), h), strokeWidth = 1.5f)
+                    drawCircle(MarkerMagenta, 4f, Offset(xAt(mi), yAt(amps[mi])))
+                }
+            }.exceptionOrNull()
 
-                drawFrequencyLabels(measurer, labelStyle, trace)
+            // Surface a draw failure on the graph instead of silently showing nothing.
+            if (err != null) {
+                drawText(
+                    measurer,
+                    "draw error: ${err.javaClass.simpleName}: ${err.message}".take(140),
+                    topLeft = Offset(4f, 14f),
+                    style = TextStyle(color = Color(0xFFFF5555), fontSize = 9.sp),
+                )
             }
         }
     }
-}
-
-private fun DrawScope.drawMarker(
-    index: Int?,
-    amps: FloatArray,
-    color: Color,
-    xFor: (Int) -> Float,
-    yFor: (Float) -> Float,
-) {
-    if (index == null || index !in amps.indices) return
-    val x = xFor(index)
-    drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5f)
-    drawCircle(color, radius = 4f, center = Offset(x, yFor(amps[index])))
 }
 
 private fun DrawScope.drawGrid(rows: Int = 6, cols: Int = 8) {
@@ -132,29 +137,12 @@ private fun DrawScope.drawAmplitudeLabels(measurer: TextMeasurer, style: TextSty
     }
 }
 
-private fun DrawScope.drawFrequencyLabels(measurer: TextMeasurer, style: TextStyle, trace: Trace) {
-    fun mhz(i: Int) = "%.1f".format(trace.freqHzAt(i) / 1e6)
-    val last = trace.pointCount - 1
-    if (last < 1) return
-    val mid = last / 2
-    val texts = listOf(0 to mhz(0), mid to mhz(mid), last to mhz(last))
-    for ((i, t) in texts) {
-        val measured = measurer.measure(t, style)
-        val x = (size.width * i / last - measured.size.width / 2f).coerceIn(0f, size.width - measured.size.width)
-        drawText(measurer, t, topLeft = Offset(x, size.height - measured.size.height - 1f), style = style)
-    }
-}
-
 @Composable
 fun WaterfallCanvas(
     history: List<FloatArray>,
     window: AmpWindow,
-    trace: Trace?,
     modifier: Modifier = Modifier,
 ) {
-    val measurer = rememberTextMeasurer()
-    val labelStyle = TextStyle(color = Color.White, fontSize = 9.sp)
-
     Canvas(modifier = modifier) {
         runCatching {
             if (history.isEmpty()) {
@@ -182,16 +170,6 @@ fun WaterfallCanvas(
                 image = bmp.asImageBitmap(),
                 dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
             )
-
-            // Frequency axis along the bottom, over a translucent strip for legibility.
-            if (trace != null && trace.pointCount > 1) {
-                drawRect(
-                    color = Color(0xAA000000),
-                    topLeft = Offset(0f, size.height - 14f),
-                    size = Size(size.width, 14f),
-                )
-                drawFrequencyLabels(measurer, labelStyle, trace)
-            }
         }
     }
 }
