@@ -48,12 +48,15 @@ class FrameParser {
                 when (b[pos + 1]) {
                     S_UPPER, S_LOWER -> {
                         if (pos + 3 > b.size) break // need count byte
-                        val points = ((b[pos + 2].toInt() and 0xFF) + 1) * 16
+                        val countByte = b[pos + 2].toInt() and 0xFF
                         val payloadStart = pos + 3
-                        val frameEnd = payloadStart + points + EOL_LEN
-                        if (frameEnd > b.size) break // wait for full payload + EOL
+                        // Two conventions exist for the count byte: the exact point
+                        // count (firmware 01.34 sends e.g. 0x70 = 112), or (byte+1)*16
+                        // per the published spec. Pick whichever frames a trailing CRLF.
+                        val points = resolveSweepPoints(b, payloadStart, countByte, (countByte + 1) * 16)
+                            ?: break // not enough buffered yet to decide
                         out += decodeSweep(b, payloadStart, points)
-                        pos = frameEnd
+                        pos = payloadStart + points + EOL_LEN
                     }
 
                     Z_LOWER -> {
@@ -165,6 +168,31 @@ class FrameParser {
                 i++
             }
             return -1
+        }
+
+        private fun endsWithEol(b: ByteArray, payloadStart: Int, points: Int): Boolean {
+            val end = payloadStart + points
+            return end + EOL_LEN <= b.size && b[end] == CR && b[end + 1] == LF
+        }
+
+        /**
+         * Resolve the number of sweep points for a `$S`/`$s` frame. Returns the chosen
+         * count, or null if not enough bytes are buffered yet to decide.
+         *
+         * [exact] = treat the count byte as the literal point count (firmware 01.34).
+         * [scaled] = (byte+1)*16 per the published spec. We pick whichever lands a CRLF
+         * exactly after the payload; preferring [exact] since that's what real hardware
+         * sends, with [scaled] as the spec-compliant fallback.
+         */
+        fun resolveSweepPoints(b: ByteArray, payloadStart: Int, exact: Int, scaled: Int): Int? {
+            if (endsWithEol(b, payloadStart, exact)) return exact
+            if (endsWithEol(b, payloadStart, scaled)) return scaled
+            // Neither validated. If the larger candidate isn't fully buffered yet, wait.
+            val larger = maxOf(exact, scaled)
+            if (payloadStart + larger + EOL_LEN > b.size) return null
+            // Both candidates buffered but neither shows a CRLF (desync/garbage): take the
+            // exact count so we advance by a bounded amount and resync on the next marker.
+            return exact
         }
     }
 }

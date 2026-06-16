@@ -38,6 +38,18 @@ class FrameParserTest {
         return out.toByteArray()
     }
 
+    /** Build a `$S` frame whose count byte is the EXACT point count (firmware 01.34). */
+    private fun sweepFrameSExact(amplitudes: IntArray): ByteArray {
+        require(amplitudes.size <= 255)
+        val out = ByteArrayOutputStream()
+        out.write('$'.code)
+        out.write('S'.code)
+        out.write(amplitudes.size) // exact count, NOT (size/16 - 1)
+        amplitudes.forEach { out.write(it) }
+        out.write(CR); out.write(LF)
+        return out.toByteArray()
+    }
+
     // 16 amplitude bytes that deliberately include the bytes which would break a
     // line-based parser: 0x0D, 0x0A, '$' (0x24), '#' (0x23). 0x11 decodes to -8.5.
     private val trickyAmps = intArrayOf(
@@ -128,5 +140,29 @@ class FrameParserTest {
         assertNotNull(msgs[0] as RfeMessage.Config)
         assertTrue(msgs[1] is RfeMessage.Sweep)
         assertTrue(msgs[2] is RfeMessage.Sweep)
+    }
+
+    @Test
+    fun parsesExactCountSweep() {
+        // Firmware 01.34: $S 0x70 (=112) + 112 bytes. Must NOT be read as (0x70+1)*16.
+        val amps = IntArray(112) { (it % 64) }
+        val msgs = FrameParser().parse(sweepFrameSExact(amps))
+        assertEquals(1, msgs.size)
+        assertEquals(112, (msgs[0] as RfeMessage.Sweep).amplitudesDbm.size)
+    }
+
+    @Test
+    fun exactCountStreamDoesNotOverReadAcrossFrames() {
+        // Several exact-count frames back to back: each must decode as its own 112-pt
+        // sweep (the over-read bug concatenated ~16 frames into one and injected the
+        // 0x0A EOL bytes as periodic -5.0 dBm spikes).
+        val parser = FrameParser()
+        parser.parse(ascii("#C2-F:0100000,0001000,-030,-118,0112\r\n"))
+        val out = ByteArrayOutputStream()
+        repeat(5) { f -> out.write(sweepFrameSExact(IntArray(112) { (it + f) % 50 })) }
+
+        val msgs = parser.parse(out.toByteArray())
+        assertEquals(5, msgs.size)
+        msgs.forEach { assertEquals(112, (it as RfeMessage.Sweep).amplitudesDbm.size) }
     }
 }
