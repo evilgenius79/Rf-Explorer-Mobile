@@ -74,6 +74,7 @@ fun SpectrumScreen(
                 WaterfallCanvas(
                     history = state.waterfall,
                     window = window,
+                    trace = state.trace,
                     modifier = Modifier.fillMaxWidth().height(260.dp).padding(8.dp),
                 )
             } else {

@@ -65,7 +65,7 @@ data class SpectrumUiState(
     val recordedSweeps: Int = 0,
     val lastExportPath: String? = null,
     val frozen: Boolean = false,
-    val autoscale: Boolean = false,
+    val autoscale: Boolean = true,
     val markerA: Int? = null,
     val markerB: Int? = null,
     val activeMarker: Int = 0, // 0 = A, 1 = B
@@ -101,7 +101,7 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update {
             it.copy(
                 calcMode = mode,
-                autoscale = prefs.getBoolean("autoscale", false),
+                autoscale = prefs.getBoolean("autoscale", true),
                 controls = loadControls(),
             )
         }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
@@ -148,8 +149,12 @@ private fun DrawScope.drawFrequencyLabels(measurer: TextMeasurer, style: TextSty
 fun WaterfallCanvas(
     history: List<FloatArray>,
     window: AmpWindow,
+    trace: Trace?,
     modifier: Modifier = Modifier,
 ) {
+    val measurer = rememberTextMeasurer()
+    val labelStyle = TextStyle(color = Color.White, fontSize = 9.sp)
+
     Canvas(modifier = modifier) {
         runCatching {
             if (history.isEmpty()) {
@@ -177,6 +182,16 @@ fun WaterfallCanvas(
                 image = bmp.asImageBitmap(),
                 dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
             )
+
+            // Frequency axis along the bottom, over a translucent strip for legibility.
+            if (trace != null && trace.pointCount > 1) {
+                drawRect(
+                    color = Color(0xAA000000),
+                    topLeft = Offset(0f, size.height - 14f),
+                    size = Size(size.width, 14f),
+                )
+                drawFrequencyLabels(measurer, labelStyle, trace)
+            }
         }
     }
 }
