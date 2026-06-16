@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Needed by the release step to create/update the rolling debug release.
+permissions:
+  contents: write
+
+jobs:
+  # Hardware-free gate: pure-Kotlin protocol command framing + frame parser.
+  protocol-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run :protocol unit tests
+        run: ./gradlew :protocol:test --no-daemon
+
+  # Compiles the Android modules (:transport, :app) and produces a debug APK.
+  # GitHub-hosted runners include the Android SDK; we just ensure the API 35
+  # platform + build-tools are present.
+  android-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Name the APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/rfexplorer-debug.apk
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfexplorer-debug-apk
+          path: dist/rfexplorer-debug.apk
+          if-no-files-found: error
+
+      # Rolling "debug-latest" prerelease on branch pushes — stable download URL:
+      #   /releases/download/debug-latest/rfexplorer-debug.apk
+      - name: Publish rolling debug release
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-latest
+          name: Debug APK (latest build)
+          prerelease: true
+          body: |
+            Auto-built debug APK from `${{ github.sha }}` on `${{ github.ref_name }}`.
+            Debug-signed — for sideloading/testing only, not Play Store upload.
+          files: dist/rfexplorer-debug.apk
+
+      # Versioned release when a v* tag is pushed.
+      - name: Publish tagged release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RF Explorer Mobile ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            RF Explorer Mobile ${{ github.ref_name }} — debug-signed APK for sideloading.
+            See the README for setup and usage.
+          files: dist/rfexplorer-debug.apk

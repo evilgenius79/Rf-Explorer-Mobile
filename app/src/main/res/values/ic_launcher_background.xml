@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark navy matching the round icon's corners; shows behind squircle masks. -->
+    <color name="ic_launcher_background">#0C1E33</color>
+</resources>
