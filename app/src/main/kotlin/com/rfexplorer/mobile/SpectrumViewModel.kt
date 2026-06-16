@@ -144,9 +144,21 @@ class SpectrumViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnect() {
         val t = transport
         transport = null
-        sessionJob?.cancel()
+        sessionJob?.cancel() // also cancels the state collector, so set the UI state ourselves
         sessionJob = null
-        if (t != null) viewModelScope.launch { t.close() }
+        if (t != null) viewModelScope.launch { runCatching { t.close() } }
+        accumulator.reset()
+        waterfall.clear()
+        _ui.update {
+            it.copy(
+                connection = ConnectionState.Disconnected,
+                trace = null,
+                waterfall = emptyList(),
+                peaks = emptyList(),
+                markerA = null,
+                markerB = null,
+            )
+        }
     }
 
     fun setCalcMode(mode: CalcMode) {
