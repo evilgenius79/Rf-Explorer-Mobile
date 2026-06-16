@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, "claude/**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -67,11 +68,10 @@ jobs:
           path: dist/rfexplorer-debug.apk
           if-no-files-found: error
 
-      # Publish a single rolling "debug-latest" prerelease with a stable download
-      # URL, refreshed on every push (not on PRs). Direct link to the APK:
+      # Rolling "debug-latest" prerelease on branch pushes — stable download URL:
       #   /releases/download/debug-latest/rfexplorer-debug.apk
       - name: Publish rolling debug release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref_type == 'branch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: debug-latest
@@ -80,4 +80,17 @@ jobs:
           body: |
             Auto-built debug APK from `${{ github.sha }}` on `${{ github.ref_name }}`.
             Debug-signed — for sideloading/testing only, not Play Store upload.
+          files: dist/rfexplorer-debug.apk
+
+      # Versioned release when a v* tag is pushed.
+      - name: Publish tagged release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RF Explorer Mobile ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            RF Explorer Mobile ${{ github.ref_name }} — debug-signed APK for sideloading.
+            See the README for setup and usage.
           files: dist/rfexplorer-debug.apk
