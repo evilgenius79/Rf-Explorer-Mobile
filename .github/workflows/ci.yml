@@ -6,8 +6,13 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Cut a versioned release at this tag (e.g. v0.1.0). Blank = none."
+        required: false
+        default: ""
 
-# Needed by the release step to create/update the rolling debug release.
+# Needed by the release step to create/update releases.
 permissions:
   contents: write
 
@@ -82,15 +87,17 @@ jobs:
             Debug-signed — for sideloading/testing only, not Play Store upload.
           files: dist/rfexplorer-debug.apk
 
-      # Versioned release when a v* tag is pushed.
+      # Versioned release: on a pushed v* tag, or via workflow_dispatch with a
+      # release_tag input (action-gh-release creates the tag at this commit).
       - name: Publish tagged release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          name: RF Explorer Mobile ${{ github.ref_name }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: RF Explorer Mobile ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.release_tag }}
           prerelease: false
           generate_release_notes: true
           body: |
-            RF Explorer Mobile ${{ github.ref_name }} — debug-signed APK for sideloading.
-            See the README for setup and usage.
+            RF Explorer Mobile — debug-signed APK for sideloading. See the README for setup and usage.
           files: dist/rfexplorer-debug.apk
